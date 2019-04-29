@@ -14,14 +14,26 @@ class AttributeNetwork(nn.Module):
         x = F.sigmoid(self.fc2(x))
         return x
 
+class AttributeNetwork_End_to_End(nn.Module):
+    """docstring for RelationNetwork"""
+    def __init__(self, input_size, hidden_size, output_size):
+        super(AttributeNetwork_End_to_End, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self,x):
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
 class RelationNetwork(nn.Module):
     """docstring for RelationNetwork"""
     def __init__(self, input_size, hidden_size):
         super(RelationNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_size,hidden_size)
-        self.fc2 = nn.Linear(hidden_size,1)
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, 1)
 
-    def forward(self,x):
+    def forward(self, x):
         x = F.relu(self.fc1(x))
         #x = F.sigmoid(self.fc2(x))
         x = self.fc2(x)
