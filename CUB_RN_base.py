@@ -10,9 +10,8 @@ import math
 import argparse
 import random
 import os
-from sklearn.metrics import accuracy_score
 from model_dataset import AttributeNetwork, RelationNetwork, IntegratedDataset
-from utils import evaluate_attribute_network, evaluate_relation_network
+from utils import evaluate_attribute_network, evaluate_relation_network, compute_accuracy_relation_network
 
 
 def main():
@@ -22,7 +21,7 @@ def main():
     parser.add_argument("-e", "--epochs", type = int, default = 1000)
     parser.add_argument("-m", "--model", type = int, default = 1)
     parser.add_argument("-t", "--test_episode", type = int, default = 1000)
-    parser.add_argument("-l", "--learning_rate", type = float, default = 1e-5)
+    parser.add_argument("-l", "--learning_rate", type = float, default = 1e-3)
     parser.add_argument("-g", "--gpu", type=int, default=0)
     args = parser.parse_args()
 
@@ -79,28 +78,18 @@ def main():
     test_seen_attributes = attribute_values[test_seen_loc] # test_seen_attributes_values
     test_seen_label = label[test_seen_loc].astype(int) # test_seen_label
     
-    num_valid = int(len(train_label) * 0.2)
-    
-    valid_features = train_features[-num_valid:]
-    valid_attributes = train_attributes[-num_valid:]
-    valid_label = train_label[-num_valid:]
+    test_features = np.concatenate((test_unseen_features, test_seen_features), 0)
+    test_attributes = np.concatenate((test_unseen_attributes, test_seen_attributes), 0)
+    test_label = np.concatenate((test_unseen_label, test_seen_label), 0)
 
-    train_features = train_features[:-num_valid]
-    train_attributes = train_attributes[:-num_valid]
-    train_label = train_label[:-num_valid]
-    
     train_label_set = np.unique(train_label)
-    valid_label_set = np.unique(valid_label)
     test_unseen_label_set = np.unique(test_unseen_label)
     test_seen_label_set = np.unique(test_seen_label)
+    test_label_set = np.unique(test_label)
 
     train_features = torch.from_numpy(train_features) # [5646, 2048]
     train_attributes = torch.from_numpy(train_attributes) # [5646, 312]
     train_label = torch.from_numpy(train_label).unsqueeze(1) # [5646, 1]
-
-    valid_features = torch.from_numpy(valid_features) # [1411, 2048]
-    valid_attributes = torch.from_numpy(valid_attributes) # [1411, 312]
-    valid_label = torch.from_numpy(valid_label).unsqueeze(1) # [1411, 1]
 
     test_unseen_features = torch.from_numpy(test_unseen_features) # [2967, 2048]
     test_unseen_attributes = torch.from_numpy(test_unseen_attributes) # [2967, 312]
@@ -109,26 +98,35 @@ def main():
     test_seen_features = torch.from_numpy(test_seen_features) # [1764, 2048]
     test_seen_attributes = torch.from_numpy(test_seen_attributes) # [1764, 312]
     test_seen_label = torch.from_numpy(test_seen_label).unsqueeze(1) # [1764, 1]
+
+    test_features = torch.from_numpy(test_features) # [4731, 2048]
+    test_attributes = torch.from_numpy(test_attributes) # [4731, 312]
+    test_label = torch.from_numpy(test_label).unsqueeze(1) # [4731, 1]
+
     # init network
     print("init networks")
     attribute_network = AttributeNetwork(2048, 1200, 312).cuda()
     relation_network = RelationNetwork(624, 300).cuda()
     
     train_data = IntegratedDataset(train_features, train_label, train_attributes)
-    valid_data = IntegratedDataset(valid_features, valid_label, valid_attributes)
+    test_data = IntegratedDataset(test_features, test_label, test_attributes)
+    test_unseen_data = IntegratedDataset(test_unseen_features, test_unseen_label, test_unseen_attributes)
+    test_seen_data = IntegratedDataset(test_seen_features, test_seen_label, test_seen_attributes)
 
     mse = nn.MSELoss().cuda()
-    #ce = nn.CrossEntropyLoss(weight=torch.FloatTensor([0.1, 1.])).cuda()
+    ce = nn.CrossEntropyLoss().cuda()
     nll = torch.nn.NLLLoss(weight=torch.FloatTensor([0.1, 1.])).cuda()
     #mse = nn.BCELoss().cuda()
 
     train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
-    valid_loader = DataLoader(valid_data, batch_size=BATCH_SIZE, shuffle=False)
+    test_loader = DataLoader(test_data, batch_size=BATCH_SIZE, shuffle=True)
+    test_unseen_loader = DataLoader(test_unseen_data, batch_size=BATCH_SIZE, shuffle=False)
+    test_seen_loader = DataLoader(test_seen_data, batch_size=BATCH_SIZE, shuffle=False)
 
     if MODEL == 1:
-        attribute_network_optim = torch.optim.Adam(attribute_network.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+        attribute_network_optim = torch.optim.Adam(attribute_network.parameters(), lr=LEARNING_RATE)
         #attribute_network_optim = torch.optim.SGD(attribute_network.parameters(), lr=1e-3, momentum=0.9, weight_decay=1e-4, nesterov=True)
-        attribute_network_scheduler = StepLR(attribute_network_optim, step_size=30000, gamma=0.5)
+        attribute_network_scheduler = StepLR(attribute_network_optim, step_size=10000, gamma=0.5)
 
         print("training attribute network...")
 
@@ -158,7 +156,7 @@ def main():
                 total_steps += 1
 
             #if epoch % 50 == 0:
-            loss_att_mean, acc_att = evaluate_attribute_network(attribute_network, nll, valid_loader)
+            loss_att_mean, acc_att = evaluate_attribute_network(attribute_network, nll, test_loader)
             print("Epoch: {:>3} loss_att: {:.5f}".format(epoch, loss_att_mean))
             print("Epoch: {:>3} acc_att: {:.5f}".format(epoch, acc_att))
 
@@ -167,8 +165,8 @@ def main():
                 best_loss_att = loss_att_mean
 
     else:
-        relation_network_optim = torch.optim.Adam(relation_network.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
-        relation_network_scheduler = StepLR(relation_network_optim, step_size=30000, gamma=0.5)
+        relation_network_optim = torch.optim.Adam(relation_network.parameters(), lr=LEARNING_RATE)
+        relation_network_scheduler = StepLR(relation_network_optim, step_size=10000, gamma=0.5)
 
         print("training relation network...")
 
@@ -201,10 +199,11 @@ def main():
                 for label in batch_labels.numpy():
                     index = np.argwhere(sample_labels == label)
                     re_batch_labels.append(index[0][0])
-                re_batch_labels = torch.LongTensor(re_batch_labels)
-                one_hot_labels = torch.zeros(len(batch_att), class_num).scatter_(1, re_batch_labels.view(-1, 1), 1).cuda()
+                re_batch_labels = torch.LongTensor(re_batch_labels).cuda()
+                #one_hot_labels = torch.zeros(len(batch_att), class_num).scatter_(1, re_batch_labels.view(-1, 1), 1).cuda()
                 
-                loss_rel = mse(relations, one_hot_labels)
+                loss_rel = ce(relations, re_batch_labels)
+                #loss_rel = mse(relations, one_hot_labels)
 
                 # update
                 relation_network.zero_grad()
@@ -212,13 +211,22 @@ def main():
                 relation_network_optim.step()
 
             #if epoch % 50 == 0:
-            loss_rel_mean, acc_rel = evaluate_relation_network(relation_network, mse, valid_loader, all_embeddings)
-            print("Epoch: {:>3} loss_rel: {:.5f}".format(epoch, loss_rel_mean))
-            print("Epoch: {:>3} acc_rel: {:.5f}".format(epoch, acc_rel))
+            zsl = compute_accuracy_relation_network(relation_network, test_unseen_loader, test_unseen_label_set, all_embeddings)
+            gzsl_u = compute_accuracy_relation_network(relation_network, test_unseen_loader, test_label_set, all_embeddings)
+            gzsl_s = compute_accuracy_relation_network(relation_network, test_seen_loader, test_label_set, all_embeddings)
 
+            H = 2 * gzsl_s * gzsl_u / (gzsl_u + gzsl_s)
+            #loss_rel_mean, acc_rel = evaluate_relation_network(relation_network, mse, test_loader, all_embeddings)
+            #loss_rel_mean, acc_rel = evaluate_relation_network(relation_network, ce, test_loader, all_embeddings)
+            
+            #print("Epoch: {:>3} loss_rel: {:.5f}".format(epoch, loss_rel_mean))
+            #print("Epoch: {:>3} acc_rel: {:.5f}".format(epoch, acc_rel))
+            print("Epoch: {:>3} zsl: {:.5f} gzsl_u: {:.5f} gzsl_s: {:.5f} H: {:.5f}".format(epoch, zsl, gzsl_u, gzsl_s, H))
+            '''
             if best_loss_rel > loss_rel_mean:
                 torch.save(relation_network.state_dict(), 'models/relation_network.pt')
                 best_loss_rel = loss_rel_mean
+            '''
 
         assert 1 == 0
         # if (episode+1)%100 == 0:
