@@ -1,2 +1,3 @@
 # ZSL_Relation
-Code Repo for 10-708 project
+Generalized Zero-shot Learning with Attention Mechanism
+
